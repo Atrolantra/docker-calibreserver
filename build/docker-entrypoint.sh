@@ -86,15 +86,12 @@ do
     wait $!
 	current=`date +%s`
 	last_modified=`stat -c "%Y" ${DBFILE}`
-	log "${db_updateable} top of loop"
 	# watch for changes to metadata.db and restart server if changes
 	if [ $(($current-$last_modified)) -gt 30 ]; then 
-		log "setting updateable true"
 		db_updateable=true
 	else 
 		if [ "$db_updateable" = true ]; then
 			db_updateable=false
-			log "${db_updateable} after set false"
 			log "Restarting due to db changes"
 			
 			# stop
