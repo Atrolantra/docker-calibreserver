@@ -4,21 +4,6 @@
 # FUNCTIONS
 ## 
 
-function load_secret {
-    # function checks if specified environment variable contains the file path to a docker secret
-    # if so it overwrite the value with the file contents
-
-    # first parameter is the environment variable name 
-    name=${1}
-    # second parameter is the value of the environment variable
-    value=${2}
-
-    # now check if the value equals a file in the container
-    if [ -f "${value}" ]; then
-        export ${name}=$(cat "${value}")
-    fi
-}
-
 function log {
     echo "$(date) docker-entrypoint.sh - ${@}"
 }
@@ -53,15 +38,6 @@ trap _term SIGTERM
 # set the default parameters
 CLI_PARAM=" --port=80 --pidfile=/tmp/calibre.pid --daemonize --log=/dev/stdout"
 
-# load values - either from env or from specified file (for docker secrets)
-load_secret LIBRARY_PATH ${LIBRARY_PATH}
-load_secret USERDB ${USERDB}
-load_secret PREFIX_URL ${PREFIX_URL}
-load_secret WATCH_PATH ${WATCH_PATH}
-load_secret INTERVAL ${INTERVAL}
-load_secret LIBRARY_ID ${LIBRARY_ID}
-load_secret ONEBOOKPERDIR ${ONEBOOKPERDIR}
-
 # set path to userdb - have a look at:
 # https://manual.calibre-ebook.com/server.html#managing-user-accounts-from-the-command-line-only
 [ -n "${USERDB}" ] && CLI_PARAM="${CLI_PARAM} --enable-auth --userdb=${USERDB}"
@@ -90,7 +66,7 @@ if [ -n "${WATCH_PATH}" ]; then
 fi
 
 # start the calibre server
-log "Starting calibre server with this cli parameters: $CLI_PARAM"
+log "Starting calibre server with these cli parameters: $CLI_PARAM"
 /usr/bin/calibre-server $CLI_PARAM ${LIBRARY_PATH}
 
 # get the calibre pid
@@ -101,11 +77,43 @@ fi
 CALIBRE_PID=$(cat /tmp/calibre.pid)
 log "calibre server running with pid ${CALIBRE_PID}"
 
-
+DBFILE="${LIBRARY_PATH}/metadata.db"
+db_updateable=false
 while true
 do
     # now we just wait until we receive a sigterm
     sleep 3 &    # This script is not really doing anything.
     wait $!
-done
+	current=`date +%s`
+	last_modified=`stat -c "%Y" ${DBFILE}`
+	log "${db_updateable} top of loop"
+	# watch for changes to metadata.db and restart server if changes
+	if [ $(($current-$last_modified)) -gt 30 ]; then 
+		log "setting updateable true"
+		db_updateable=true
+	else 
+		if [ "$db_updateable" = true ]; then
+			db_updateable=false
+			log "${db_updateable} after set false"
+			log "Restarting due to db changes"
+			
+			# stop
+			kill -TERM ${CALIBRE_PID} 2>/dev/null
+			log "Killed server"
+			sleep 10 &
+			wait $!
+			
+			# start the calibre server
+			log "Starting calibre server with these cli parameters: $CLI_PARAM"
+			/usr/bin/calibre-server $CLI_PARAM ${LIBRARY_PATH}
 
+			# get the calibre pid
+			if [ ! -f /tmp/calibre.pid ]; then
+				log "calibre pid file not found. aborting"
+				_term 1
+			fi
+			CALIBRE_PID=$(cat /tmp/calibre.pid)
+			log "calibre server running with pid ${CALIBRE_PID}"
+		fi
+	fi
+done
